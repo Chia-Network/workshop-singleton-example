@@ -1,0 +1,24 @@
+{
+    "name": "workshop",
+    "version": "1.0.0",
+    "description": "For the workshop",
+    "main": "dist/index.js",
+    "scripts": {
+        "start": "ts-node src/index.ts",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "ts-node": "^10.9.1",
+        "typescript": "^4.9.3"
+    },
+    "dependencies": {
+        "bip39": "^3.0.4",
+        "chia-bls": "^1.0.1",
+        "chia-rpc": "^1.0.0",
+        "chia-wallet-lib": "^1.0.0",
+        "clvm-lib": "^1.0.0",
+        "dotenv": "^16.0.3"
+    }
+}
