@@ -7,7 +7,6 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { SingletonInfo } from './SingletonInfo';
 
 dotenv.config();
 
@@ -15,12 +14,7 @@ const mnemonic = process.env.MNEMONIC!;
 const privateKey = PrivateKey.fromSeed(mnemonicToSeedSync(mnemonic));
 
 const dir = path.join(__dirname, '..');
-const launcherPuzzle = Program.deserializeHex(
-    fs.readFileSync(path.join(dir, 'launcher.clsp.hex'), 'utf-8')
-);
-const singletonPuzzle = Program.deserializeHex(
-    fs.readFileSync(path.join(dir, 'singleton.clsp.hex'), 'utf-8')
-);
+
 const messagePuzzle = Program.deserializeHex(
     fs.readFileSync(path.join(dir, 'message.clsp.hex'), 'utf-8')
 );
@@ -31,253 +25,167 @@ const keyStore = new KeyStore(privateKey);
 const wallet = new StandardWallet(node, keyStore);
 const genesis = fromHex(process.env.GENESIS!);
 
+const amount = 1;
 const fee = 0.00005e12;
 
-async function launch(message: Program) {
+async function newInstance(initialMessage: Program) {
     await wallet.sync();
 
     const spend = wallet.createSpend();
 
-    const amount = 1;
-
-    // Create the launcher coin
-    const send = await wallet.send(launcherPuzzle.hash(), amount, fee);
-    spend.coin_spends.push(...send);
-
-    // Find the coin we are spending from the wallet
-    const parentCoinId = toCoinId(send[0].coin);
-
-    // Infer the launcher coin we are creating
-    const launcherCoin: Coin = {
-        parent_coin_info: formatHex(toHex(parentCoinId)),
-        puzzle_hash: formatHex(launcherPuzzle.hashHex()),
-        amount,
-    };
-
-    // Calculate the launcher id
-    const launcherId = toCoinId(launcherCoin);
-
-    // Create the inner puzzle
-    const innerPuzzle = messagePuzzle.curry([
+    // Curry the puzzle
+    const puzzle = messagePuzzle.curry([
         // Mod hash
         Program.fromBytes(messagePuzzle.hash()),
 
-        // Message is empty until eve spend
+        // Message is empty until the eve is spent
         Program.nil,
     ]);
 
-    // Create the singleton
-    const singleton = singletonPuzzle.curry([
-        // Singleton struct
-        Program.cons(
-            // Singleton mod hash
-            Program.fromBytes(singletonPuzzle.hash()),
-            Program.cons(
-                // Launcher id
-                Program.fromBytes(launcherId),
+    // Create the eve coin
+    const send = await wallet.send(puzzle.hash(), amount, fee);
+    spend.coin_spends.push(...send);
 
-                // Launcher mod hash
-                Program.fromBytes(launcherPuzzle.hash())
-            )
-        ),
+    // Calculate the root coin id
+    const eveCoin: Coin = {
+        parent_coin_info: formatHex(toHex(toCoinId(send[0].coin))),
+        puzzle_hash: formatHex(puzzle.hashHex()),
+        amount,
+    };
 
-        // Inner puzzle
-        innerPuzzle,
-    ]);
-
+    // Create the eve solution
     const solution = Program.fromList([
-        // Curried singleton puzzle hash
-        Program.fromBytes(singleton.hash()),
+        // Message
+        initialMessage,
 
         // Amount
         Program.fromInt(amount),
-
-        // Key value list
-        Program.nil,
     ]);
 
-    // Create the eve singleton
+    // Spend the eve coin
     spend.coin_spends.push({
-        coin: launcherCoin,
-        puzzle_reveal: launcherPuzzle.serializeHex(),
+        coin: eveCoin,
+        puzzle_reveal: puzzle.serializeHex(),
         solution: solution.serializeHex(),
-    });
-
-    const innerSolution = Program.fromList([message, Program.fromInt(amount)]);
-
-    const eveSolution = Program.fromList([
-        // Lineage proof
-        Program.fromList([
-            // Parent coin info
-            Program.fromBytes(launcherId),
-
-            // Amount
-            Program.fromInt(amount),
-        ]),
-
-        // Amount
-        Program.fromInt(amount),
-
-        // Inner solution
-        innerSolution,
-    ]);
-
-    // Spend the eve singleton
-    spend.coin_spends.push({
-        coin: {
-            parent_coin_info: formatHex(toHex(toCoinId(launcherCoin))),
-            puzzle_hash: formatHex(singleton.hashHex()),
-            amount,
-        },
-        puzzle_reveal: singleton.serializeHex(),
-        solution: eveSolution.serializeHex(),
     });
 
     // Sign the wallet spend
     wallet.signSpend(spend, genesis);
 
     // Complete the transaction
-    console.log('Launcher id:', toHex(launcherId));
+    console.log('Eve coin id:', toHex(toCoinId(eveCoin)));
     console.log(await node.pushTx(spend));
 }
 
-async function sync(): Promise<SingletonInfo> {
-    const launcherId = process.env.LAUNCHER_ID!;
+interface SyncInfo {
+    parent: string;
+    current: string;
+}
 
-    let singleton = launcherId;
-    let parent = singleton;
+async function sync(): Promise<SyncInfo> {
+    const eveCoinId = process.env.EVE_COIN_ID!;
+
+    let current = eveCoinId;
+    let parent = current;
 
     while (true) {
-        // Fetch coins created by the singleton
+        // Fetch coins created by the current coin
         const coinRecords = await node.getCoinRecordsByParentIds(
-            [singleton],
+            [current],
             undefined,
             undefined,
             true
         );
         if (!coinRecords.success) throw new Error(coinRecords.error);
 
-        // If there are none, the singleton is synced
+        // If there are none, we are already synced
         if (!coinRecords.coin_records.length) break;
 
-        parent = singleton;
+        // Update the parent
+        parent = current;
 
         // Continue with the child coin as the new singleton
         const coinRecord = coinRecords.coin_records[0];
-        singleton = toHex(toCoinId(coinRecord.coin));
+        current = toHex(toCoinId(coinRecord.coin));
     }
 
-    // Get the parent coin record
-    const parentCoinRecord = await node.getCoinRecordByName(parent);
-    if (!parentCoinRecord.success) throw new Error(parentCoinRecord.error);
-
-    // Get the singleton coin record
-    const singletonCoinRecord = await node.getCoinRecordByName(parent);
-    if (!singletonCoinRecord.success)
-        throw new Error(singletonCoinRecord.error);
-
-    // Get the parent spend
-    const puzzleAndSolution = await node.getPuzzleAndSolution(
+    return {
         parent,
-        parentCoinRecord.coin_record.spent_block_index
+        current,
+    };
+}
+
+async function getMessage(syncInfo: SyncInfo): Promise<Program> {
+    const coinRecord = await node.getCoinRecordByName(syncInfo.parent);
+    if (!coinRecord.success) throw new Error(coinRecord.error);
+
+    const puzzleAndSolution = await node.getPuzzleAndSolution(
+        syncInfo.parent,
+        coinRecord.coin_record.spent_block_index
     );
     if (!puzzleAndSolution.success) throw new Error(puzzleAndSolution.error);
 
     const spend = puzzleAndSolution.coin_solution;
-    const puzzle = Program.deserializeHex(sanitizeHex(spend.puzzle_reveal));
 
-    let message: Program;
+    const solution = Program.deserializeHex(
+        sanitizeHex(spend.solution)
+    ).toList();
 
-    if (puzzle.equals(launcherPuzzle))
-        throw new Error(
-            'Singleton not launched yet. Perhaps the transaction is still unconfirmed.'
-        );
-
-    // Fetch it from the puzzle reveal
-    const args = puzzle.uncurry()![1];
-    const innerPuzzle = args[1];
-    const innerArgs = innerPuzzle.uncurry()![1];
-    message = innerArgs[1];
-
-    return {
-        launcherId: fromHex(launcherId),
-        message,
-        parent: parentCoinRecord.coin_record.coin,
-        singleton: singletonCoinRecord.coin_record.coin,
-    };
+    return solution[0];
 }
 
-async function getMessage() {
-    const info = await sync();
-
-    console.log(info.message.toText());
+async function printMessage() {
+    const syncInfo = await sync();
+    const message = await getMessage(syncInfo);
+    console.log('Message:', message.toString());
 }
 
 async function setMessage(newMessage: Program) {
-    const info = await sync();
+    await wallet.sync();
+
+    const syncInfo = await sync();
+    const message = await getMessage(syncInfo);
+
+    // Fetch the coin record
+    const coinRecord = await node.getCoinRecordByName(syncInfo.current);
+    if (!coinRecord.success) throw new Error(coinRecord.error);
+
+    const coin = coinRecord.coin_record.coin;
 
     const spend = wallet.createSpend();
 
-    const singleton = singletonPuzzle.curry([
-        // Singleton struct
-        Program.cons(
-            // Singleton mod hash
-            Program.fromBytes(singletonPuzzle.hash()),
-            Program.cons(
-                // Launcher id
-                Program.fromBytes(info.launcherId),
-
-                // Launcher mod hash
-                Program.fromBytes(launcherPuzzle.hash())
-            )
-        ),
-
-        // Inner puzzle
-        messagePuzzle.curry([
-            Program.fromBytes(messagePuzzle.hash()),
-            info.message,
-        ]),
+    // Create the current puzzle
+    const puzzle = messagePuzzle.curry([
+        Program.fromBytes(messagePuzzle.hash()),
+        message,
     ]);
 
-    const innerSolution = Program.fromList([
-        newMessage,
-        Program.fromInt(info.singleton.amount),
-    ]);
-
+    // Create the solution
     const solution = Program.fromList([
-        // Lineage proof
-        Program.fromList([
-            // Parent coin info
-            Program.fromBytes(toCoinId(info.parent)),
-
-            // Puzzle hash
-            Program.fromBytes(fromHex(sanitizeHex(info.singleton.puzzle_hash))),
-
-            // Amount
-            Program.fromInt(info.singleton.amount),
-        ]),
-
-        // Amount
-        Program.fromInt(info.singleton.amount),
-
-        // Inner solution
-        innerSolution,
+        newMessage,
+        Program.fromInt(coin.amount),
     ]);
 
     spend.coin_spends.push({
         // Spend the current singleton
-        coin: info.singleton,
+        coin,
 
         // The puzzle reveal contains the old message
-        puzzle_reveal: singleton.serializeHex(),
+        puzzle_reveal: puzzle.serializeHex(),
 
         // Spend it with the new message
         solution: solution.serializeHex(),
     });
 
+    const send = await wallet.send(puzzle.hash(), 0, fee);
+
+    spend.coin_spends.push(...send);
+
+    wallet.signSpend(spend, genesis);
+
     console.log(await node.pushTx(spend));
 }
 
-launch(Program.fromText('Hello, world!'));
-// getMessage();
+// newInstance(Program.fromText('Hello, world!'));
+printMessage();
 // setMessage(Program.fromText('Goodbye, world!'));
