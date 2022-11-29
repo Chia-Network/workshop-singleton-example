@@ -1,7 +1,7 @@
 import { mnemonicToSeedSync } from 'bip39';
 import { fromHex, PrivateKey, toHex } from 'chia-bls';
 import { Coin, formatHex, FullNode, toCoinId } from 'chia-rpc';
-import { KeyStore, signSpendBundle, StandardWallet } from 'chia-wallet-lib';
+import { KeyStore, StandardWallet } from 'chia-wallet-lib';
 import { Program } from 'clvm-lib';
 import dotenv from 'dotenv';
 import fs from 'fs';
@@ -12,7 +12,6 @@ dotenv.config();
 
 const mnemonic = process.env.MNEMONIC!;
 const privateKey = PrivateKey.fromSeed(mnemonicToSeedSync(mnemonic));
-const publicKey = privateKey.getG1();
 
 const dir = path.join(__dirname, '..');
 const launcherPuzzle = Program.deserializeHex(
@@ -34,9 +33,6 @@ const genesis = fromHex(process.env.GENESIS!);
 const message = messagePuzzle.curry([
     // Mod hash
     Program.fromBytes(messagePuzzle.hash()),
-
-    // Public key
-    Program.fromJacobianPoint(publicKey),
 
     // Message
     Program.fromText('Hello, world!'),
@@ -104,9 +100,6 @@ async function launch() {
         puzzle_reveal: launcherPuzzle.serializeHex(),
         solution: solution.serializeHex(),
     });
-
-    // Sign the singleton spend
-    signSpendBundle(spend, genesis, true, privateKey);
 
     // Sign the wallet spend
     wallet.signSpend(spend, genesis);
