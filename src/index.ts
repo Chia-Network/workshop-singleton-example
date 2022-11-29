@@ -187,5 +187,5 @@ async function setMessage(newMessage: Program) {
 }
 
 // newInstance(Program.fromText('Hello, world!'));
-printMessage();
+// printMessage();
 // setMessage(Program.fromText('Goodbye, world!'));
