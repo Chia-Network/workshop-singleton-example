@@ -177,7 +177,7 @@ async function setMessage(newMessage: Program) {
         solution: solution.serializeHex(),
     });
 
-    const send = await wallet.send(puzzle.hash(), 0, fee);
+    const send = await wallet.sendFee(fee);
 
     spend.coin_spends.push(...send);
 

@@ -17,7 +17,7 @@
         "bip39": "^3.0.4",
         "chia-bls": "^1.0.1",
         "chia-rpc": "^1.0.0",
-        "chia-wallet-lib": "^1.0.1",
+        "chia-wallet-lib": "^1.1.0",
         "clvm-lib": "^1.0.0",
         "dotenv": "^16.0.3"
     }
